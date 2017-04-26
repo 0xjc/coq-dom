@@ -1,0 +1,47 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>Renderer</title>
+</head>
+<body>
+
+<textarea autofocus spellcheck="false" id="input" oninput="update()"
+  onpropertychange="update()"></textarea>
+<br><br>
+<canvas id="canvas"></canvas>
+
+<script>
+
+function update() {
+  var input = document.getElementById('input').value;
+  input = input.split('     = (').join('');
+  input = input.split(')\n     : Z * Z * list (Z * Z * color)').join('');
+  input = input.split('(').join('"').split(')').join('"').split(';').join(',');
+  console.log(input);
+  input = JSON.parse('[' + input + ']');
+
+  var canvas = document.getElementById('canvas');
+  canvas.width = input[0];
+  canvas.height = input[1];
+  var ctx = canvas.getContext('2d');
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
+  
+  var pixels = input[2];
+  for (var i = 0; i < pixels.length; i++) {
+    // x y 'Rgb' r g b a
+    var components = pixels[i].split(',').join('').split(' ');
+    var x = components[0];
+    var y = components[1];
+    var r = components[3];
+    var g = components[4];
+    var b = components[5];
+    var a = components[6];
+    ctx.fillStyle = 'rgb(' + r + ', ' + g + ', ' + b + ')'
+    ctx.fillRect(x, y, 1, 1);
+  }
+}
+
+</script>
+</body>
+</html>
