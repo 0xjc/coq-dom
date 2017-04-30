@@ -22,26 +22,6 @@ Inductive color :=
 | Rgb : Z -> Z -> Z -> color
 | None_c.
 
-Definition color_eqb c1 c2 :=
-  match c1, c2 with
-  | None_c, None_c => true
-  | Rgb r1 g1 b1, Rgb r2 g2 b2 =>
-    Z.eqb r1 r2 && Z.eqb g1 g2 && Z.eqb b1 b2
-  | _, _ => false
-  end.
-
-Lemma color_eqb_eq c1 c2 :
-  color_eqb c1 c2 = true -> c1 = c2.
-Proof.
-  unfold color_eqb; intros.
-  destruct c1, c2; auto; try discriminate.
-  repeat (apply andb_true_iff in H; destruct H).
-  apply Z.eqb_eq in H.
-  apply Z.eqb_eq in H1.
-  apply Z.eqb_eq in H0.
-  subst; auto.
-Qed.
-
 Definition red   := Rgb 255 0 0.
 Definition green := Rgb 0 255 0.
 Definition blue  := Rgb 0 0 255.
@@ -92,16 +72,14 @@ Qed.
 Definition in_box x0 y0 w h x y : Prop :=
   x0 <= x /\ x < x0 + w /\ y0 <= y /\ y < y0 + h.
 
-(* Let omega make a big decision procedure that compares things. *)
+(* Let intuition make a big decision procedure that compares things. *)
 Definition in_box_dec x0 y0 w h x y :
   let ib := in_box x0 y0 w h x y in {ib} + {~ib}.
 Proof.
-  simpl.
-  unfold in_box.
+  simpl; unfold in_box.
   destruct (Z_le_dec x0 x); destruct (Z_lt_dec x (x0 + w));
-    destruct (Z_le_dec y0 y); destruct (Z_lt_dec y (y0 + h)).
-  1: left; auto.
-  all: right; omega.
+    destruct (Z_le_dec y0 y); destruct (Z_lt_dec y (y0 + h));
+      intuition auto.
 Defined.
 (* Print in_box_dec. *)
 
@@ -161,34 +139,6 @@ Qed.
 
 Inductive position := Static | Relative | Absolute.
 Inductive overflow := Visible | Hidden.
-
-Definition position_eqb pos1 pos2 :=
-  match pos1, pos2 with
-  | Static, Static
-  | Relative, Relative
-  | Absolute, Absolute => true
-  | _, _ => false
-  end.
-Lemma position_eqb_eq pos1 pos2 :
-  position_eqb pos1 pos2 = true -> pos1 = pos2.
-Proof.
-  unfold position_eqb; intros.
-  destruct pos1, pos2; auto; try discriminate.
-Qed.
-
-Definition overflow_eqb ovf1 ovf2 :=
-  match ovf1, ovf2 with
-  | Visible, Visible => true
-  | Hidden, Hidden => true
-  | _, _ => false
-  end.
-Lemma overflow_eqb_eq ovf1 ovf2 :
-  overflow_eqb ovf1 ovf2 = true -> ovf1 = ovf2.
-Proof.
-  unfold overflow_eqb; intros.
-  destruct ovf1, ovf2; auto; try discriminate.
-Qed.
-
 Inductive attributes :=
   Attributes : forall
     (left top width height : Z)
@@ -321,136 +271,149 @@ end.
 
 Definition render d := if is_good_dom d then render' d c0 else blank.
 
-Function eq_dom_up_to_static_coords dom1 dom2 :=
-  match dom1, dom2 with
-  | None_d, None_d => true
-  | None_d, _ => false
-  | _, None_d => false
-  | Dom (Attributes l1 t1 w1 h1 c1 p1 o1) child1 sib1,
-    Dom (Attributes l2 t2 w2 h2 c2 p2 o2) child2 sib2 =>
-    (match p1, p2 with
-     | Static, Static => true
-     | Relative, Relative
-     | Absolute, Absolute => Z.eqb l1 l2 && Z.eqb t1 t2
-     | _, _ => false
-     end)
-     && Z.eqb w1 w2
-     && Z.eqb h1 h2
-     && color_eqb c1 c2
-     && overflow_eqb o1 o2
-     && eq_dom_up_to_static_coords child1 child2
-     && eq_dom_up_to_static_coords sib1 sib2
-  end.
-
-Lemma static_coord_irrelevance_1 dom1 dom2 pos:
-  eq_dom_up_to_static_coords dom1 dom2 = true ->
-  render_statics dom1 pos = render_statics dom2 pos.
-Proof.
-  revert pos dom2.
-  unfold eq_dom_up_to_static_coords.
-  induction dom1 as [a1 child1 IHchild1 sibling1 IHsibling1 |].
-  2: destruct dom2; auto; discriminate.
-  fold eq_dom_up_to_static_coords in *.
-  destruct dom2 as [a2 child2 sibling2 |].
-  2: destruct a1; discriminate.
-  intros H.
-  destruct a1 as [l1 t1 w1 h1 c1 p1 o1].
-  destruct a2 as [l2 t2 w2 h2 c2 p2 o2].
-  destruct p1, p2; simpl in H; try discriminate.
-  all: apply andb_true_iff in H; destruct H as [H Heqsibling].
-  all: apply andb_true_iff in H; destruct H as [H Heqchild].
-  all: apply andb_true_iff in H; destruct H as [H Heqoverflow].
-  all: apply andb_true_iff in H; destruct H as [H Heqcolor].
-  all: apply andb_true_iff in H; destruct H as [H Heqh].
-  1:   rename H into Heqw.
-  2,3: apply andb_true_iff in H; destruct H as [H Heqw].
-  2,3: apply andb_true_iff in H; destruct H as [H Heqt].
-  2,3: rename H into Heql.
-  2,3: apply Z.eqb_eq in Heql.
-  2,3: apply Z.eqb_eq in Heqt.
-  all: apply Z.eqb_eq in Heqw.
-  all: apply Z.eqb_eq in Heqh.
-  all: apply color_eqb_eq in Heqcolor.
-  all: apply overflow_eqb_eq in Heqoverflow.
-  all: subst.
-  all: destruct pos as [x y].
-  all: unfold render_statics; simpl; fold render_statics.
-  - rewrite (IHchild1 (Coord x y) child2 Heqchild).
-    rewrite (IHsibling1 (Coord x (y + h2)) sibling2 Heqsibling).
-    auto.
-  - rewrite (IHsibling1 (Coord x (y + h2)) sibling2 Heqsibling).
-    auto.
-  - rewrite (IHsibling1 (Coord x y) sibling2 Heqsibling).
-    auto.
-Qed.
+(* Equality of two doms up to static coords. *)
+Inductive Eq_dom_utsc : dom -> dom -> Prop :=
+| Eq_dom_utsc_eq : forall dom, Eq_dom_utsc dom dom
+| Eq_dom_utsc_static :
+    forall l1 l2 t1 t2 w h c o child sib,
+    Eq_dom_utsc (Dom (Attributes l1 t1 w h c Static o) child sib)
+                (Dom (Attributes l2 t2 w h c Static o) child sib).
 
 Lemma static_coord_irrelevance dom1 dom2 pos:
-  eq_dom_up_to_static_coords dom1 dom2 = true ->
+  Eq_dom_utsc dom1 dom2 ->
   render' dom1 pos = render' dom2 pos.
 Proof.
-  revert pos dom2.
-  unfold eq_dom_up_to_static_coords.
-  induction dom1 as [a1 child1 IHchild1 sibling1 IHsibling1 |].
-  2: destruct dom2; auto; discriminate.
-  fold eq_dom_up_to_static_coords in *.
-  destruct dom2 as [a2 child2 sibling2 |].
-  2: destruct a1; discriminate.
-  intros H.
-  destruct a1 as [l1 t1 w1 h1 c1 p1 o1].
-  destruct a2 as [l2 t2 w2 h2 c2 p2 o2].
-  destruct p1, p2; simpl in H; try discriminate.
-  all: apply andb_true_iff in H; destruct H as [H Heqsibling].
-  all: apply andb_true_iff in H; destruct H as [H Heqchild].
-  all: apply andb_true_iff in H; destruct H as [H Heqoverflow].
-  all: apply andb_true_iff in H; destruct H as [H Heqcolor].
-  all: apply andb_true_iff in H; destruct H as [H Heqh].
-  1:   rename H into Heqw.
-  2,3: apply andb_true_iff in H; destruct H as [H Heqw].
-  2,3: apply andb_true_iff in H; destruct H as [H Heqt].
-  2,3: rename H into Heql.
-  2,3: apply Z.eqb_eq in Heql.
-  2,3: apply Z.eqb_eq in Heqt.
-  all: apply Z.eqb_eq in Heqw.
-  all: apply Z.eqb_eq in Heqh.
-  all: apply color_eqb_eq in Heqcolor.
-  all: apply overflow_eqb_eq in Heqoverflow.
-  all: subst.
-  all: destruct pos as [x y].
-  all: unfold render'; simpl; fold render'.
-  - rewrite (IHchild1 (Coord x y) child2 Heqchild).
-    rewrite (IHsibling1 (Coord x (y + h2)) sibling2 Heqsibling).
-    auto.
-  - rewrite (IHchild1 c0 child2 Heqchild).
-    rewrite (IHsibling1 (Coord x (y + h2)) sibling2 Heqsibling).
-    rewrite (static_coord_irrelevance_1 _ _ _ Heqchild).
-    auto.
-  - rewrite (IHchild1 c0 child2 Heqchild).
-    rewrite (IHsibling1 (Coord x y) sibling2 Heqsibling).
-    rewrite (static_coord_irrelevance_1 _ _ _ Heqchild).
-    auto.
+  intros; induction H; auto.
 Qed.
 
-Definition color_in_graphic (c:color) (g:graphic) :=
-  exists pos, g pos = c.
+Inductive Color_in_graphic : color -> graphic -> Prop :=
+| Cig_at : forall g pos, Color_in_graphic (g pos) g.
+Hint Constructors Color_in_graphic.
 
-Function color_in_dom (c:color) (d:dom) :=
-  match d with
-  | None_d => false
-  | Dom (Attributes _ _ _ _ c' _ _) child sib =>
-    color_eqb c c' || color_in_dom c child || color_in_dom c sib
-  end.
+Inductive Color_in_dom : color -> dom -> Prop :=
+| Cid_here : forall l t w h c p o child sib,
+             Color_in_dom c (Dom (Attributes l t w h c p o) child sib)
+| Cid_child : forall c a child sib, Color_in_dom c child -> Color_in_dom c (Dom a child sib)
+| Cid_sib : forall c a child sib, Color_in_dom c sib -> Color_in_dom c (Dom a child sib).
+Hint Constructors Color_in_dom.
 
-Lemma color_in color dom pos:
-  color <> None_c ->
-  color_in_dom color dom = true ->
-  color_in_graphic color (render' dom pos).
+(* Only the None color is in the blank graphic. *)
+Lemma color_in_blank c:
+  Color_in_graphic c blank ->
+  c = None_c.
+Proof.
+  intros; remember blank as g.
+  destruct H; subst; auto.
+Qed.
+
+(* Only the background color is in the solid graphic. *)
+Lemma color_in_solid c c':
+  Color_in_graphic c (solid c') ->
+  c = c'.
+Proof.
+  intros. remember (solid c') as g.
+  destruct H; subst; auto.
+Qed.
+
+(* If a color (not None_c) is in a clipped graphic,
+   then it is in the original graphic. *)
+Lemma color_in_clip c g off dim:
+  c <> None_c ->
+  Color_in_graphic c (clip g off dim) ->
+  Color_in_graphic c g.
 Proof.
   intros.
-  unfold color_in_dom in H0.
-  destruct dom as [a child sibling|]; try discriminate.
-  fold color_in_dom in H0.
-  
-Admitted.
+  remember (clip g off dim) as g'.
+  destruct H0; subst.
+  destruct off as [x y].
+  destruct dim as [w h].
+  unfold clip.
+  destruct pos.
+  destruct (in_box_dec x y w h x0 y0).
+  - auto.
+  - contradict H.
+    unfold clip.
+    destruct (in_box_dec x y w h x0 y0); [contradiction | auto].
+Qed.
+
+Lemma color_in_clip_ovf c ovf off dim g:
+  c <> None_c ->
+  Color_in_graphic c (clip_ovf ovf off dim g) ->
+  Color_in_graphic c g.
+Proof.
+  unfold clip_ovf.
+  destruct ovf; [auto | apply color_in_clip].
+Qed.
+
+(* Only the background color or the None color is in a box graphic. *)
+Lemma color_in_box c dim c':
+  c <> None_c ->
+  Color_in_graphic c (box dim c') ->
+  c = c'.
+Proof.
+  intros.
+  unfold box in H0.
+  apply color_in_clip in H0; auto.
+  apply color_in_solid in H0; auto.
+Qed.
+
+(* If a color is in the composition of two graphics,
+   then it is in one of the components. *)
+Lemma color_in_composite c g1 g2 pos:
+  Color_in_graphic c (g1 CC g2 @ pos) ->
+  Color_in_graphic c g1 \/ Color_in_graphic c g2.
+Proof.
+  intros.
+  remember (g1 CC g2 @ pos) as g.
+  unfold composite in Heqg.
+  destruct pos as [x y].
+  destruct H.
+  destruct pos as [x' y'].
+  subst.
+  remember (g2 (Coord (- x + x') (- y + y'))) as c.
+  destruct c; [rewrite Heqc|]; auto.
+Qed.
+
+Ltac destruct_color_in H :=
+  repeat
+    ((apply color_in_composite in H; destruct H) ||
+     (apply color_in_clip_ovf in H; auto) ||
+     (apply color_in_blank in H; try contradiction) ||
+     (apply color_in_box in H; subst; auto)).
+
+Lemma color_in_render_statics color dom pos:
+  color <> None_c ->
+  Color_in_graphic color (render_statics dom pos) ->
+  Color_in_dom color dom.
+Proof.
+  intro; revert pos.
+  induction dom as [attrs child IHchild sib IHsib |].
+  2: simpl; intros; apply color_in_blank in H0; contradiction.
+  destruct attrs as [l t w h c' p o].
+  destruct pos as [x y].
+  destruct p; simpl in *; intros;
+    destruct_color_in H0;
+    try (pose (IHchild _ H0); auto);
+    try (pose (IHsib _ H0); auto).
+Qed.
+
+Lemma color_in_render' color dom pos:
+  color <> None_c ->
+  Color_in_graphic color (render' dom pos) ->
+  Color_in_dom color dom.
+Proof.
+  intro; revert pos.
+  induction dom as [attrs child IHchild sib IHsib |].
+  2: simpl; intros; apply color_in_blank in H0; contradiction.
+  destruct attrs as [l t w h c' p o].
+  destruct pos as [x y].
+  destruct p; simpl in *; intros;
+    destruct_color_in H0;
+    try (pose (IHchild _ H0); auto);
+    try (pose (IHsib _ H0); auto);
+    try (pose (color_in_render_statics _ _ _ H H0); auto).
+Qed.
+
 
                                                                
 Definition green_middle := Dom (Attributes 5 0 55 40 green Relative Visible) None_d None_d.
