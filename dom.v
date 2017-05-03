@@ -69,6 +69,19 @@ Proof.
   destruct (g3 (Coord (- (x0 + x1) + x) (- (y + y0) + y1))); auto.
 Qed.
 
+Lemma composite_blank : forall g off,
+  g CC blank @ off = g.
+Proof.
+  intros; extensionality pos; destruct off, pos; auto.
+Qed.
+
+Lemma composite_onto_blank : forall g,
+  blank CC g @ c0 = g.
+Proof.
+  intros; extensionality pos; destruct pos as [x y]; simpl.
+  destruct (g (Coord x y)); auto.
+Qed.
+
 Definition in_box x0 y0 w h x y : Prop :=
   x0 <= x /\ x < x0 + w /\ y0 <= y /\ y < y0 + h.
 
@@ -275,9 +288,9 @@ Definition render d := if is_good_dom d then render' d c0 else blank.
 Inductive Eq_dom_utsc : dom -> dom -> Prop :=
 | Eq_dom_utsc_eq : forall dom, Eq_dom_utsc dom dom
 | Eq_dom_utsc_static :
-    forall l1 l2 t1 t2 w h c o child sib,
-    Eq_dom_utsc (Dom (Attributes l1 t1 w h c Static o) child sib)
-                (Dom (Attributes l2 t2 w h c Static o) child sib).
+  forall l1 l2 t1 t2 w h c o child sib,
+  Eq_dom_utsc (Dom (Attributes l1 t1 w h c Static o) child sib)
+              (Dom (Attributes l2 t2 w h c Static o) child sib).
 
 Lemma static_coord_irrelevance dom1 dom2 pos:
   Eq_dom_utsc dom1 dom2 ->
@@ -414,11 +427,10 @@ Proof.
     try (pose (color_in_render_statics _ _ _ H H0); auto).
 Qed.
 
-
                                                                
 Definition green_middle := Dom (Attributes 5 0 55 40 green Relative Visible) None_d None_d.
 Definition red_top_right := Dom (Attributes 5 5 20 20 red Static Visible) None_d green_middle.
-Definition test := Dom (Attributes 0 0 100 70 blue Absolute Hidden) red_top_right None_d.
+Definition test := Dom (Attributes 0 0 100 70 blue Absolute Visible) red_top_right None_d.
 
 Compute print (render test) 100 70.
 
@@ -439,106 +451,244 @@ Proof.
 Qed.
 
 (* Dumb optimization: don't clip on overflow. *)
-Function stupid_renderer' dom pos (is_static : bool) : graphic :=
+Function stupid_render_statics dom pos : graphic :=
   match dom, pos with
   | None_d, _ => blank
   | Dom (Attributes l t w h c p o) child sib, Coord x y =>
-    let bg := box (Dim w h) c in
-    match p, is_static with
-    | Static, true =>
-      let g := composite blank bg pos in
-      let g_child := stupid_renderer' child pos true in
-      let g := composite0 g g_child in
-      let g_sib := stupid_renderer' sib (Coord x (y + h)) true in
-      composite0 g g_sib
-    | Static, false =>
-      let g_child := stupid_renderer' child pos false in
-      let g_sib := stupid_renderer' sib (Coord x (y + h)) false in
-      composite0 g_child g_sib
-    | Relative, true =>
-      stupid_renderer' sib (Coord x (y + h)) true
-    | Relative, false =>
-      let pos' := Coord (x + l) (y + t) in
-      let g := composite blank bg pos' in
-      (* Do a static pass, then a positioned pass. *)
-      let g_child := stupid_renderer' child c0 true in
-      let g := (composite g g_child pos') in
-      let g_child := stupid_renderer' child c0 false in
-      let g := (composite g g_child pos') in
-      let g_sib := stupid_renderer' sib (Coord x (y + h)) false in
-      composite0 g g_sib
-    | Absolute, true =>
-      stupid_renderer' sib pos true
-    | Absolute, false =>
-      let pos' := Coord l t in
-      let g := composite blank bg pos' in
-      (* Do a static pass, then a positioned pass. *)
-      let g_child := stupid_renderer' child c0 true in
-      let g := (composite g g_child pos') in
-      let g_child := stupid_renderer' child c0 false in
-      let g := (composite g g_child pos') in
-      let g_sib := stupid_renderer' sib pos false in
-      composite0 g g_sib
+    match p with
+    | Static =>
+      blank CC (box (Dim w h) c) @ pos
+            C0 (render_statics child pos)
+            C0 (render_statics sib (Coord x (y + h)))
+    | Relative =>
+      render_statics sib (Coord x (y + h))
+    | Absolute =>
+      render_statics sib pos
     end
   end.
 
-Definition stupid_render d := if is_good_dom d then stupid_renderer' d c0 false else blank.
+Function stupid_render' dom pos : graphic :=
+  match dom, pos with
+  | None_d, _ => blank
+  | Dom (Attributes l t w h c p o) child sib, Coord x y =>
+    match p with
+    | Static =>
+      (render' child pos)
+        C0 (render' sib (Coord x (y + h)))
+    | Relative => (* Do a static pass, then a positioned pass. *)
+      let pos' := Coord (x + l) (y + t) in
+      (blank CC (box (Dim w h) c) @ pos'
+             CC (render_statics child c0) @ pos'
+             CC (render' child c0) @ pos')
+        C0 (render' sib (Coord x (y + h)))
+    | Absolute => (* Do a static pass, then a positioned pass. *)
+      let pos' := Coord l t in
+      (blank CC (box (Dim w h) c) @ pos'
+             CC (render_statics child c0) @ pos'
+             CC (render' child c0) @ pos')
+        C0 (render' sib pos)
+    end
+  end.
 
-Lemma asdf : forall d, good_overflow d -> render' d = stupid_renderer' d.
+Definition stupid_render d := if is_good_dom d then stupid_render' d c0 else blank.
+
+Lemma stupid_render_correct d:
+  good_overflow d ->
+  render' d = stupid_render' d.
 Proof.
   intros.
   induction d; auto.
-  inversion H.
-  subst.
+  inversion H; subst.
   intuition.
-  simpl.
-  rewrite <- H0.
-  rewrite <- H1.
-  auto.
 Qed.
 
-
 (* Instead of making a fresh graphic, paint on a graphic at an offset. *)
-Function whatever_render' dom pos g offset (is_static : bool) : graphic :=
-  match dom, pos, offset with
-  | None_d, _, _ => blank
-  | Dom (Attributes l t w h c p o) child sib, Coord x y, Coord x0 y0 =>
-    let bg := box (Dim w h) c in
-    match p, is_static with
-    | Static, true =>
-      let g := composite g bg (add_c pos offset) in
-      let g := whatever_render' child pos g offset true in
-      whatever_render' sib (Coord x (y + h)) g offset true
-    | Static, false =>
-      let g := whatever_render' child pos g offset false in
-      whatever_render' sib (Coord x (y + h)) g offset false
-    | Relative, true =>
-      whatever_render' sib (Coord x (y + h)) g offset true
-    | Relative, false =>
+Function whatever_render_statics dom pos g offset : graphic :=
+  match dom, pos with
+  | None_d, _ => g
+  | Dom (Attributes l t w h c p o) child sib, Coord x y =>
+    match p with
+    | Static =>
+      let g := g CC (box (Dim w h) c) @ (add_c pos offset) in
+      let g := whatever_render_statics child pos g offset in
+      whatever_render_statics sib (Coord x (y + h)) g offset
+    | Relative =>
+      whatever_render_statics sib (Coord x (y + h)) g offset
+    | Absolute =>
+      whatever_render_statics sib pos g offset
+    end
+  end.
+
+Function whatever_render' dom pos g offset : graphic :=
+  match dom, pos with
+  | None_d, _ => g
+  | Dom (Attributes l t w h c p o) child sib, Coord x y =>
+    match p with
+    | Static =>
+      let g := whatever_render' child pos g offset in
+      whatever_render' sib (Coord x (y + h)) g offset
+    | Relative => (* Do a static pass, then a positioned pass. *)
       let pos' := Coord (x + l) (y + t) in
-      let g := composite g bg (add_c pos' offset) in
+      let g := g CC (box (Dim w h) c) @ (add_c pos' offset) in
       (* Do a static pass, then a positioned pass. *)
-      let g := whatever_render' child c0 g (add_c pos' offset) true in
-      let g := whatever_render' child c0 g (add_c pos' offset) false in
-      whatever_render' sib (Coord x (y + h)) g offset false
-    | Absolute, true =>
-      whatever_render' sib pos g offset true
-    | Absolute, false =>
+      let g := whatever_render_statics child c0 g (add_c pos' offset) in
+      let g := whatever_render' child c0 g (add_c pos' offset) in
+      whatever_render' sib (Coord x (y + h)) g offset
+    | Absolute => (* Do a static pass, then a positioned pass. *)
       let pos' := Coord l t in
-      let g := composite g bg (add_c pos' offset) in
+      let g := g CC (box (Dim w h) c) @ (add_c pos' offset) in
       (* Do a static pass, then a positioned pass. *)
-      let g := whatever_render' child c0 g (add_c pos' offset) true in
-      let g := whatever_render' child c0 g (add_c pos' offset) false in
-      whatever_render' sib pos g offset false
+      let g := whatever_render_statics child c0 g (add_c pos' offset) in
+      let g := whatever_render' child c0 g (add_c pos' offset) in
+      whatever_render' sib pos g offset
     end
   end.
 
 Definition whatever_render d :=
-  if is_good_dom d then whatever_render' d c0 blank c0 false else blank.
+  if is_good_dom d then whatever_render' d c0 blank c0 else blank.
 
 Compute print (whatever_render test) 100 70.
 
-Lemma whatever : forall d, good_overflow d -> render d = whatever_render d.
+(* Rendering onto an existing graphic is the same as
+   rendering onto a blank graphic, then compositing over the existing graphic.
+   
+   These proofs are simple. They only look complicated because I couldn't
+   get `rewrite at` to work, and the `ring` simplifications are written manually.
+   The core of the proof is the `composite_assoc` and `composite_blank` step. *)
+Lemma whatever_render_statics_equiv d pos g offset:
+  whatever_render_statics d pos g offset =
+  g CC whatever_render_statics d pos blank c0 @ offset.
 Proof.
-  intros.
-Admitted.
+  revert d pos g offset.
+  induction d.
+  2: intros; simpl; symmetry; apply composite_blank.
+  destruct a as [l t w h c p o].
+  destruct pos as [x y].
+  destruct offset as [x' y'].
+  destruct p; simpl; auto.
+  rewrite IHd1, IHd2.
+  rewrite (IHd1 (Coord x y) (blank CC box (Dim w h) c @ Coord (x + 0) (y + 0)) c0).
+  rewrite (IHd2 (Coord x (y + h)) (blank CC box (Dim w h) c @ Coord (x + 0) (y + 0)
+      CC whatever_render_statics d1 (Coord x y) blank c0 @ c0) c0).
+  repeat (rewrite composite_assoc; simpl).
+  rewrite composite_blank.
+  replace (x' + (x + 0)) with (x + x') by ring.
+  replace (y' + (y + 0)) with (y + y') by ring.
+  replace (x' + 0) with x' by ring.
+  replace (y' + 0) with y' by ring.
+  auto.
+Qed.
+
+Lemma whatever_render'_equiv d pos g offset:
+  whatever_render' d pos g offset =
+  g CC whatever_render' d pos blank c0 @ offset.
+Proof.
+  revert d pos g offset.
+  induction d.
+  2: intros; simpl; symmetry; apply composite_blank.
+  destruct a as [l t w h c p o].
+  destruct pos as [x y].
+  destruct offset as [x' y'].
+  destruct p; simpl; auto.
+  - rewrite IHd1, IHd2.
+    rewrite (IHd2 (Coord x (y + h)) (whatever_render' d1 (Coord x y) blank c0) c0).
+    repeat (rewrite composite_assoc; simpl).
+    replace (x' + 0) with x' by ring.
+    replace (y' + 0) with y' by ring.
+    auto.
+  - rewrite whatever_render_statics_equiv, IHd1, IHd2.
+    rewrite (whatever_render_statics_equiv d1 c0
+      (blank CC box (Dim w h) c @ Coord (x + l + 0) (y + t + 0))
+           (Coord (x + l + 0) (y + t + 0))).
+    rewrite (IHd1 c0
+      (blank CC box (Dim w h) c @ Coord (x + l + 0) (y + t + 0)
+         CC whatever_render_statics d1 c0 blank c0 @
+         Coord (x + l + 0) (y + t + 0)) (Coord (x + l + 0) (y + t + 0))).
+    rewrite (IHd2 (Coord x (y + h))
+     (blank CC box (Dim w h) c @ Coord (x + l + 0) (y + t + 0)
+      CC whatever_render_statics d1 c0 blank c0 @
+      Coord (x + l + 0) (y + t + 0) CC whatever_render' d1 c0 blank c0 @
+      Coord (x + l + 0) (y + t + 0)) c0).
+    repeat (rewrite composite_assoc; simpl).
+    rewrite composite_blank.
+    replace (x' + (x + l + 0)) with (x + l + x') by ring.
+    replace (y' + (y + t + 0)) with (y + t + y') by ring.
+    replace (x' + 0) with x' by ring.
+    replace (y' + 0) with y' by ring.
+    auto.
+  - rewrite whatever_render_statics_equiv, IHd1, IHd2.
+    rewrite (whatever_render_statics_equiv d1 c0
+           (blank CC box (Dim w h) c @ Coord (l + 0) (t + 0))
+           (Coord (l + 0) (t + 0))).
+    rewrite (IHd1 c0
+        (blank CC box (Dim w h) c @ Coord (l + 0) (t + 0)
+         CC whatever_render_statics d1 c0 blank c0 @ Coord (l + 0) (t + 0))
+        (Coord (l + 0) (t + 0))).
+    rewrite (IHd2 (Coord x y)
+     (blank CC box (Dim w h) c @ Coord (l + 0) (t + 0)
+      CC whatever_render_statics d1 c0 blank c0 @ Coord (l + 0) (t + 0)
+      CC whatever_render' d1 c0 blank c0 @ Coord (l + 0) (t + 0)) c0).
+    repeat (rewrite composite_assoc; simpl).
+    rewrite composite_blank.
+    replace (x' + (l + 0)) with (l + x') by ring.
+    replace (y' + (t + 0)) with (t + y') by ring.
+    replace (x' + 0) with x' by ring.
+    replace (y' + 0) with y' by ring.
+    auto.
+Qed.
+
+(* Show whatever_render is equivalent to reference renderer. *)
+Lemma whatever_render_statics_correct d pos:
+  good_overflow d ->
+  render_statics d pos = whatever_render_statics d pos blank c0.
+Proof.
+  intros. revert pos.
+  induction d; auto.
+  inversion H; subst.
+  intuition.
+  destruct pos as [x y].
+  destruct p; simpl; auto.
+  - rewrite whatever_render_statics_equiv.
+    rewrite <- H1.
+    rewrite whatever_render_statics_equiv.
+    rewrite <- H0.
+    replace (x + 0) with x by ring.
+    replace (y + 0) with y by ring.
+    auto.
+Qed.
+
+Lemma whatever_render'_correct d pos:
+  good_overflow d ->
+  render' d pos = whatever_render' d pos blank c0.
+Proof.
+  intros. revert pos.
+  induction d; auto.
+  inversion H; subst.
+  intuition.
+  destruct pos as [x y].
+  destruct p; simpl; unfold composite0.
+  - rewrite whatever_render'_equiv.
+    rewrite <- H1.
+    rewrite whatever_render'_equiv.
+    rewrite <- H0.
+    rewrite composite_onto_blank.
+    auto.
+  - rewrite whatever_render'_equiv.
+    rewrite <- H1.
+    rewrite whatever_render'_equiv.
+    rewrite <- H0.
+    rewrite whatever_render_statics_equiv.
+    replace (x + l + 0) with (x + l) by ring.
+    replace (y + t + 0) with (y + t) by ring.
+    rewrite <- (whatever_render_statics_correct _ _ H2).
+    auto.
+  - rewrite whatever_render'_equiv.
+    rewrite <- H1.
+    rewrite whatever_render'_equiv.
+    rewrite <- H0.
+    rewrite whatever_render_statics_equiv.
+    replace (l + 0) with l by ring.
+    replace (t + 0) with t by ring.
+    rewrite <- (whatever_render_statics_correct _ _ H2).
+    auto.
+Qed.
