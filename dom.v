@@ -542,6 +542,7 @@ Inductive clip_directive : Set :=
 | Don't_clip : clip_directive
 | Clip_to : forall (pos : coordinate) (dim : dimension), clip_directive.
 
+(* The next three functions are basically all just box_intersect. *)
 Definition clip_intersect cd1 cd2 :=
   match cd1, cd2 with
   | Don't_clip, _ => cd2
@@ -563,6 +564,7 @@ Definition apply_clip cd pos dim :=
   | Don't_clip => (pos, dim)
   | Clip_to pos1 dim1 => box_intersect pos1 dim1 pos dim
   end.
+
 Function whatever_render_statics dom pos cd g offset : graphic :=
   match dom, pos with
   | None_d, _ => g
