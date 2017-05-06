@@ -22,15 +22,22 @@ Inductive color :=
 | Rgb : Z -> Z -> Z -> color
 | None_c.
 
-Definition red   := Rgb 255 0 0.
-Definition green := Rgb 0 255 0.
-Definition blue  := Rgb 0 0 255.
+Definition black   := Rgb 0 0 0.
+Definition red     := Rgb 255 0 0.
+Definition green   := Rgb 0 255 0.
+Definition blue    := Rgb 0 0 255.
+Definition yellow  := Rgb 255 255 0.
+Definition magenta := Rgb 255 0 255.
+Definition cyan    := Rgb 0 255 255.
+Definition white   := Rgb 255 255 255.
+(* None_c will show as gray on the HTML renderer *)
 
 Inductive coordinate := Coordinate : forall x y : Z, coordinate.
 Inductive dimension := Dimension : forall w h : Z, dimension.
 Notation Coord := Coordinate.
 Notation Dim := Dimension.
 Definition c0 := Coord 0 0.
+Definition d0 := Dim 0 0.
 Definition add_c c1 c2 := match c1, c2 with
 | Coord x y, Coord x' y' => Coord (x + x') (y + y')
 end.
@@ -117,10 +124,27 @@ Proof.
   destruct in_box_dec; intuition.
 Qed.
 
+Definition box_intersect off dim off' dim' :=
+  match off, dim, off', dim' with
+  | Coord x1 y1, Dim w1 h1, Coord x3 y3, Dim w3 h3 =>
+    let x2 := x1 + w1 in
+    let y2 := y1 + h1 in
+    let x4 := x3 + w3 in
+    let y4 := y3 + h3 in
+    let x5 := Z.max x1 x3 in
+    let y5 := Z.max y1 y3 in
+    let x6 := Z.min x2 x4 in
+    let y6 := Z.min y2 y4 in
+    let w5 := x6 - x5 in
+    let h5 := y6 - y5 in
+    (Coord x5 y5, Dim w5 h5)
+  end.
+
 Definition solid c : graphic := fun _ => c.
 
 (* Makes a solid box graphic at the origin. *)
-Definition box dim c : graphic := clip (solid c) c0 dim.
+Definition box_at off dim c : graphic := clip (solid c) off dim.
+Definition box := box_at c0.
 
 (* Printing makes triples of width, height, and a list of (x, y, color) triples. *)
 Definition pixel : Set := Z * Z * color.
@@ -192,7 +216,7 @@ end.
 (* Return:
    - Rendered graphic
    - Position for next static sibling. *)
-Function render_with_overflow dom g pos base (is_static : bool) : graphic :=
+(* Function render_with_overflow dom g pos base (is_static : bool) : graphic :=
   match dom, pos, base with
   | None_d, _, _ => g
   | Dom (Attributes l t w h c p o) child sib, Coord x y, Coord x0 y0 =>
@@ -217,7 +241,7 @@ Function render_with_overflow dom g pos base (is_static : bool) : graphic :=
       let g := if is_static then g else render_with_overflow child g pos' pos' false in
       render_with_overflow sib g pos base is_static
     end
-  end.
+  end. *)
 
 Definition clip_ovf (ovf : overflow) off dim g : graphic :=
   match ovf with
@@ -283,6 +307,19 @@ Definition is_good_dom d := match d with
 end.
 
 Definition render d := if is_good_dom d then render' d c0 else blank.
+
+(* Testing the reference renderer.
+   A red block followed by a green block on a black background.
+   Both blocks have a yellow stripe inside, with different clipping behavior. *)
+Definition yellow_stripe := Dom (Attributes 0 0 100 5 yellow Static Visible) None_d None_d.
+Definition green_block := Dom (Attributes 5 0 55 40 green Relative Visible) yellow_stripe None_d.
+Definition red_block := Dom (Attributes 5 5 20 20 red Static Hidden) yellow_stripe green_block.
+Definition test := Dom (Attributes 0 0 100 70 black Absolute Hidden) red_block None_d.
+
+(* Compute print (render test) 100 70. *)
+
+
+(* == Facts about the reference renderer == *)
 
 (* Equality of two doms up to static coords. *)
 Inductive Eq_dom_utsc : dom -> dom -> Prop :=
@@ -427,14 +464,9 @@ Proof.
     try (pose (color_in_render_statics _ _ _ H H0); auto).
 Qed.
 
-                                                               
-Definition green_middle := Dom (Attributes 5 0 55 40 green Relative Visible) None_d None_d.
-Definition red_top_right := Dom (Attributes 5 5 20 20 red Static Visible) None_d green_middle.
-Definition test := Dom (Attributes 0 0 100 70 blue Absolute Visible) red_top_right None_d.
 
-Compute print (render test) 100 70.
-
-(* Stupid optimization: no hidden overflows -> can paint directly *)
+(* == Stupid optimization ==
+   no hidden overflows -> can paint directly *)
 
 Inductive good_overflow : dom -> Prop :=
 | Go_none : good_overflow None_d
@@ -502,52 +534,87 @@ Proof.
   intuition.
 Qed.
 
-(* Instead of making a fresh graphic, paint on a graphic at an offset. *)
-Function whatever_render_statics dom pos g offset : graphic :=
-  match dom, pos with
-  | None_d, _ => g
-  | Dom (Attributes l t w h c p o) child sib, Coord x y =>
-    match p with
-    | Static =>
-      let g := g CC (box (Dim w h) c) @ (add_c pos offset) in
-      let g := whatever_render_statics child pos g offset in
-      whatever_render_statics sib (Coord x (y + h)) g offset
-    | Relative =>
-      whatever_render_statics sib (Coord x (y + h)) g offset
-    | Absolute =>
-      whatever_render_statics sib pos g offset
+(* == whatever_render ==
+   Instead of making a fresh graphic, paint on a graphic at an offset.
+   Note that clipping is applied directly to boxes, not to composited graphics.  *)
+
+Inductive clip_directive : Set :=
+| Don't_clip : clip_directive
+| Clip_to : forall (pos : coordinate) (dim : dimension), clip_directive.
+
+Definition clip_intersect cd1 cd2 :=
+  match cd1, cd2 with
+  | Don't_clip, _ => cd2
+  | _, Don't_clip => cd1
+  | Clip_to pos1 dim1, Clip_to pos2 dim2 =>
+    match (box_intersect pos1 dim1 pos2 dim2) with
+    | (pos3, dim3) => Clip_to pos3 dim3
     end
   end.
 
-Function whatever_render' dom pos g offset : graphic :=
+Definition restrict_clip cd ovf pos dim :=
+  match ovf with
+  | Visible => cd
+  | Hidden => clip_intersect cd (Clip_to pos dim)
+  end.
+
+Definition apply_clip cd pos dim :=
+  match cd with
+  | Don't_clip => (pos, dim)
+  | Clip_to pos1 dim1 => box_intersect pos1 dim1 pos dim
+  end.
+Function whatever_render_statics dom pos cd g offset : graphic :=
   match dom, pos with
   | None_d, _ => g
   | Dom (Attributes l t w h c p o) child sib, Coord x y =>
     match p with
     | Static =>
-      let g := whatever_render' child pos g offset in
-      whatever_render' sib (Coord x (y + h)) g offset
+      let (bg_pos, bg_dim) := apply_clip cd pos (Dim w h) in
+      let g := g CC (box_at bg_pos bg_dim c) @ offset in
+      let child_cd := restrict_clip cd o pos (Dim w h) in
+      let g := whatever_render_statics child pos child_cd g offset in
+      whatever_render_statics sib (Coord x (y + h)) cd g offset
+    | Relative =>
+      whatever_render_statics sib (Coord x (y + h)) cd g offset
+    | Absolute =>
+      whatever_render_statics sib pos cd g offset
+    end
+  end.
+
+Function whatever_render' dom pos cd g offset : graphic :=
+  match dom, pos with
+  | None_d, _ => g
+  | Dom (Attributes l t w h c p o) child sib, Coord x y =>
+    match p with
+    | Static =>
+      let child_cd := restrict_clip cd o pos (Dim w h) in
+      let g := whatever_render' child pos child_cd g offset in
+      whatever_render' sib (Coord x (y + h)) cd g offset
     | Relative => (* Do a static pass, then a positioned pass. *)
       let pos' := Coord (x + l) (y + t) in
-      let g := g CC (box (Dim w h) c) @ (add_c pos' offset) in
+      let (bg_pos, bg_dim) := apply_clip cd pos' (Dim w h) in
+      let g := g CC (box_at bg_pos bg_dim c) @ offset in
       (* Do a static pass, then a positioned pass. *)
-      let g := whatever_render_statics child c0 g (add_c pos' offset) in
-      let g := whatever_render' child c0 g (add_c pos' offset) in
-      whatever_render' sib (Coord x (y + h)) g offset
+      let child_cd := restrict_clip cd o pos' (Dim w h) in
+      let g := whatever_render_statics child pos' child_cd g offset in
+      let g := whatever_render' child pos' child_cd g offset in
+      whatever_render' sib (Coord x (y + h)) cd g offset
     | Absolute => (* Do a static pass, then a positioned pass. *)
       let pos' := Coord l t in
-      let g := g CC (box (Dim w h) c) @ (add_c pos' offset) in
+      let (bg_pos, bg_dim) := apply_clip cd pos' (Dim w h) in
+      let g := g CC (box_at bg_pos bg_dim c) @ offset in
       (* Do a static pass, then a positioned pass. *)
-      let g := whatever_render_statics child c0 g (add_c pos' offset) in
-      let g := whatever_render' child c0 g (add_c pos' offset) in
-      whatever_render' sib pos g offset
+      let child_cd := restrict_clip cd o pos' (Dim w h) in
+      let g := whatever_render_statics child pos' child_cd g offset in
+      let g := whatever_render' child pos' child_cd g offset in
+      whatever_render' sib pos cd g offset
     end
   end.
 
 Definition whatever_render d :=
-  if is_good_dom d then whatever_render' d c0 blank c0 else blank.
+  whatever_render' d c0 Don't_clip blank c0.
 
-Compute print (whatever_render test) 100 70.
+(* Compute print (whatever_render test) 100 70. *)
 
 (* Rendering onto an existing graphic is the same as
    rendering onto a blank graphic, then compositing over the existing graphic.
@@ -555,7 +622,7 @@ Compute print (whatever_render test) 100 70.
    These proofs are simple. They only look complicated because I couldn't
    get `rewrite at` to work, and the `ring` simplifications are written manually.
    The core of the proof is the `composite_assoc` and `composite_blank` step. *)
-Lemma whatever_render_statics_equiv d pos g offset:
+(* Lemma whatever_render_statics_equiv d pos g offset:
   whatever_render_statics d pos g offset =
   g CC whatever_render_statics d pos blank c0 @ offset.
 Proof.
@@ -635,10 +702,10 @@ Proof.
     replace (x' + 0) with x' by ring.
     replace (y' + 0) with y' by ring.
     auto.
-Qed.
+Qed. *)
 
 (* Show whatever_render is equivalent to reference renderer. *)
-Lemma whatever_render_statics_correct d pos:
+(* Lemma whatever_render_statics_correct d pos:
   good_overflow d ->
   render_statics d pos = whatever_render_statics d pos blank c0.
 Proof.
@@ -691,4 +758,4 @@ Proof.
     replace (t + 0) with t by ring.
     rewrite <- (whatever_render_statics_correct _ _ H2).
     auto.
-Qed.
+Qed. *)

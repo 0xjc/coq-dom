@@ -15,9 +15,13 @@
 
 function update() {
   var input = document.getElementById('input').value;
-  input = input.split('     = (').join('');
-  input = input.split(')\n     : Z * Z * list (Z * Z * color)').join('');
-  input = input.split('(').join('"').split(')').join('"').split(';').join(',');
+  input = input.replace('Query commands should not be inserted in\nscripts\n', '' )
+               .replace('     = (', '')
+               .replace(')\n     : Z * Z * list (Z * Z * color)', '')
+               .replace(/None_c/g, 'Rgb 128 128 128')
+               .replace(/\(/g, '"')
+               .replace(/\)/g, '"')
+               .replace(/;/g, ',')
   console.log(input);
   input = JSON.parse('[' + input + ']');
 
