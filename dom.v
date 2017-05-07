@@ -80,7 +80,7 @@ Definition composite base overlay offset : graphic := fun coord =>
 Definition composite0 base overlay := composite base overlay c0.
 
 Notation "base 'CC' overlay @ offset" :=
-  (composite base overlay offset) (at level 20, left associativity).
+  (composite base overlay offset) (at level 20, left associativity, only parsing).
 Notation "base 'C0' overlay" :=
   (composite0 base overlay) (at level 20, left associativity).
 
@@ -726,6 +726,12 @@ Definition restrict_clip cd ovf pos dim :=
   | Hidden => clip_intersect cd (Clip_to pos dim)
   end.
 
+Definition restrict_clip_g cd g :=
+  match cd with
+  | Don't_clip => g
+  | Clip_to pos dim => clip g pos dim
+  end.
+
 Definition clip_box cd pos dim :=
   match cd with
   | Don't_clip => (pos, dim)
@@ -1256,3 +1262,307 @@ Proof.
   destruct is_good_dom; auto.
   apply inc_render'_correct.
 Qed.
+
+
+
+(* Drops stuff not in the current layer. *)
+Function normalize d :=
+  match d with
+  | None_d => d
+  | Dom (Attributes _ _ _ _ _ Absolute _) _ sib =>
+      normalize sib
+  | Dom (Attributes _ _ w h _ Relative _) _ sib =>
+      Dom (Attributes 0 0 w h black Relative Visible) None_d (normalize sib)
+  | Dom (Attributes l t w h c Static o) child sib =>
+      Dom (Attributes l t w h c Static o) (normalize child) (normalize sib)
+  end.
+
+Ltac clean := repeat (cbn in *; subst; intuition; try discriminate; try split).
+Lemma normalize_layer : forall d p cd g o,
+    inc_render0 d p cd g o = inc_render0 (normalize d) p cd g o.
+Proof.
+  intro d.
+  functional induction (normalize d); clean; destruct p; clean.
+  destruct o0.
+  destruct (clip_box cd (Coord (x + x0) (y + y0)) (Dim w h)).
+  rewrite IHd1.
+  now rewrite IHd0.
+Qed.
+
+(* Paints a layer, unclipped and positioned at the origin. *)
+Function paint_layer d :=
+  match d with
+  | None_d => blank
+  | Dom (Attributes _ _ w h c p o) child _ =>
+      let g := box (Dim w h) c in
+      inc_render0 (normalize child) c0 Don't_clip g c0
+  end.
+
+
+Function layer_render dom pos cd g offset : graphic :=
+  match dom, pos with
+  | None_d, _ => g
+  | Dom (Attributes l t w h c p o) child sib, Coord x y =>
+    match p with
+    | Static =>
+      let child_cd := restrict_clip cd o (add_c pos offset) (Dim w h) in
+      let g := layer_render child pos child_cd g offset in
+      layer_render sib (Coord x (y + h)) cd g offset
+    | Relative =>
+      let pos' := Coord (x + l) (y + t) in
+      let child_cd := restrict_clip cd o (add_c pos' offset) (Dim w h) in
+      let g_child := paint_layer dom in
+      let g_child := blank CC g_child @ (add_c pos' offset) in
+      let g_child := restrict_clip_g child_cd g_child in
+      let g := g C0 g_child in
+      let g := layer_render child c0 child_cd g (add_c pos' offset) in
+      layer_render sib (Coord x (y + h)) cd g offset
+    | Absolute =>
+      let pos' := Coord l t in
+      let child_cd := restrict_clip cd o (add_c pos' offset) (Dim w h) in
+      let g_child := paint_layer dom in
+      let g_child := blank CC g_child @ (add_c pos' offset) in
+      let g_child := restrict_clip_g child_cd g_child in
+      let g := g C0 g_child in
+      let g := layer_render child c0 child_cd g (add_c pos' offset) in
+      layer_render sib pos cd g offset
+    end
+  end.
+
+Definition red_thing := Dom (Attributes 5 5 10 10 red Absolute Visible) None_d None_d.
+Definition blue_thing := Dom (Attributes 5 5 10 10 blue Static Visible) None_d red_thing.
+Definition green_middle := Dom (Attributes 5 0 55 40 green Relative Visible) blue_thing None_d.
+Definition red_top_right := Dom (Attributes 5 5 20 20 red Absolute Visible) green_middle None_d.
+Definition test'' := Dom (Attributes 0 0 100 70 blue Absolute Hidden) red_top_right None_d.
+Compute print (paint_layer red_top_right) 100 70.
+Compute print (layer_render test'' c0 Don't_clip blank c0) 100 70.
+Compute print (render test'') 100 70.
+
+
+Lemma defer_clip : forall d pos cd offset,
+    inc_render0 d pos cd blank offset =
+      restrict_clip_g cd (inc_render0 d pos Don't_clip blank offset).
+Proof.
+  intros.
+  rewrite inc_render0_equiv.
+  rewrite <- inc_render0_correct.
+  rewrite inc_render0_equiv.
+  rewrite <- inc_render0_correct.
+  destruct cd; clean.
+  rewrite clip_composite_distr.
+  rewrite blank_clip.
+  clean.
+Qed.
+
+Lemma box_shift : forall c x y d,
+    clip (solid c) (Coord x y) d = blank CC clip (solid c) c0 d @ (Coord x y).
+Proof.
+  intros.
+  extensionality coord.
+  destruct coord.
+  simpl.
+  destruct d.
+  destruct in_box_dec; destruct in_box_dec; destruct (solid c); clean.
+  all: unfold in_box in *; intuition; omega.
+Qed.
+
+Lemma box_shift' : forall dim pos c,
+    composite blank (box dim c) pos = box_at pos dim c.
+Proof.
+  intros.
+  extensionality px.
+  destruct px.
+  unfold box, box_at.
+  destruct dim, pos.
+  simpl.
+  destruct in_box_dec; destruct in_box_dec; destruct solid; clean.
+  all: unfold in_box in *; intuition; omega.
+Qed.
+    
+Lemma c0_assoc : forall g g' g'' c,
+    composite g (composite g' g'' c0) c = composite (composite g g' c) g'' c.
+Proof.
+  intros.
+  rewrite composite_assoc.
+  destruct c.
+  simpl.
+  rewrite Z.add_0_r.
+  rewrite Z.add_0_r.
+  auto.
+Qed.
+
+Lemma foo : forall g g' g'' c,
+    composite (composite g (composite blank g' c) c0) g'' c =
+    composite g (composite blank (composite g' g'' c0) c) c0.
+Proof.
+  clean.
+  extensionality px.
+  destruct px.
+  unfold box, box_at.
+  destruct c.
+  clean.
+  destruct g'', g'; clean.
+Qed.
+
+Lemma box_clip_exact : forall w h c,
+    (clip (box (Dim w h) c) (Coord 0 0) (Dim w h)) = box (Dim w h) c.
+Proof.
+  clean.
+  extensionality px.
+  destruct px.
+  unfold box, box_at.
+  clean.
+  now destruct in_box_dec.
+Qed.
+
+Lemma bar : forall g g' c,
+    composite g g' c = composite g (composite blank g' c) c0.
+Proof.
+  clean.
+  extensionality px.
+  destruct c, px.
+  clean.
+  destruct g'; clean.
+Qed.
+
+
+Lemma unthread_g : forall d pos cd g offset,
+    inc_render0 d pos cd g offset = composite0 g (inc_render0 d pos cd blank offset).
+Proof.
+  clean.
+  rewrite inc_render0_equiv.
+  remember (inc_render0 d pos Don't_clip blank c0) as a.
+  rewrite inc_render0_equiv.
+  subst.
+  unfold composite0.
+  now rewrite bar.
+Qed.
+    
+  
+Lemma layer_equiv : forall d pos cd g offset,
+    layer_render d pos cd g offset = inc_render' d pos cd g offset.
+Proof.
+  intros.
+  functional induction (layer_render d pos cd g offset).
+  - auto.
+  - destruct offset.
+    clean.
+    rewrite IHg1.
+    rewrite IHg0.
+    auto.
+  - clean.
+    destruct offset.
+    rewrite IHg1.
+    rewrite IHg0.
+    rewrite <- normalize_layer.
+    clear IHg1 IHg0.
+    remember (x + l + x0) as x'.
+    remember (y + t + y0) as y'.
+    remember (clip_box cd (Coord x' y') (Dim w h)) as asdf.
+    destruct asdf.
+    replace (inc_render' child c0 (restrict_clip cd o (Coord x' y') (Dim w h))
+       (g
+        C0 restrict_clip_g (restrict_clip cd o (Coord x' y') (Dim w h))
+             (composite blank (inc_render0 child c0 Don't_clip (box (Dim w h) c) c0)
+                (Coord x' y'))) (Coord x' y')) with (inc_render' child c0 (restrict_clip cd o (Coord x' y') (Dim w h))
+       (inc_render0 child c0 (restrict_clip cd o (Coord x' y') (Dim w h)) 
+                    (g C0 box_at c1 d c) (Coord x' y')) (Coord x' y'));auto.
+    unfold composite0.
+    replace (inc_render0 child c0 (restrict_clip cd o (Coord x' y') (Dim w h))
+       (composite g (box_at c1 d c) c0) (Coord x' y')) with (composite g
+       (restrict_clip_g (restrict_clip cd o (Coord x' y') (Dim w h))
+          (composite blank (inc_render0 child c0 Don't_clip (box (Dim w h) c) c0) (Coord x' y')))
+       c0); auto.
+    rewrite unthread_g.
+    remember (inc_render0 child c0 Don't_clip blank c0) as a.
+    rewrite unthread_g.
+    rewrite defer_clip.
+    rewrite inc_render0_equiv.
+    clean.
+    remember (x + l + x0) as x'.
+    remember (y + t + y0) as y'.
+    rewrite <- box_shift'.
+    remember (inc_render0 child c0 Don't_clip blank c0) as AA.
+    unfold restrict_clip_g.
+    unfold restrict_clip.
+    destruct o, cd.
+Admitted.
+
+Definition memo := dom -> option graphic.
+
+Definition good_memo f := forall d,
+    f d = None \/ f d = Some (paint_layer d).
+
+Definition empty_memo (_ : dom) := None : option graphic.
+Lemma empty_good : good_memo empty_memo.
+Proof.
+  unfold good_memo.
+  intuition.
+Qed.
+
+Definition dom_eq_dec : forall d1 d2 : dom, {d1 = d2} + {d1 <> d2}.
+Proof.
+  repeat (decide equality).
+Qed.
+
+Definition extend f d (g : graphic) d' :=
+  if dom_eq_dec d d' then Some g else f d'.
+
+Function layer_render_memo dom pos cd g offset f : graphic * memo :=
+  match dom, pos with
+  | None_d, _ => (g, f)
+  | Dom (Attributes l t w h c p o) child sib, Coord x y =>
+    match p with
+    | Static =>
+      let child_cd := restrict_clip cd o (add_c pos offset) (Dim w h) in
+      let g' := fst (layer_render_memo child pos child_cd g offset f) in
+      let f' := snd (layer_render_memo child pos child_cd g offset f) in
+      layer_render_memo sib (Coord x (y + h)) cd g' offset f'
+    | Relative =>
+      let pos' := Coord (x + l) (y + t) in
+      let child_cd := restrict_clip cd o (add_c pos' offset) (Dim w h) in
+      let g := match f dom with
+               | None => paint_layer dom
+               | Some g => g
+               end in
+      let f := extend f dom g in
+      let g := blank CC g @ (add_c pos' offset) in
+      let g := restrict_clip_g child_cd g in
+      let g' := fst (layer_render_memo child c0 child_cd g (add_c pos' offset) f) in
+      let f' := snd (layer_render_memo child c0 child_cd g (add_c pos' offset) f) in
+      layer_render_memo sib (Coord x (y + h)) cd g' offset f'
+    | Absolute =>
+      let pos' := Coord l t in
+      let child_cd := restrict_clip cd o (add_c pos' offset) (Dim w h) in
+      let g := match f dom with
+               | None => paint_layer dom
+               | Some g => g
+               end in
+      let f := extend f dom g in
+      let g := blank CC g @ (add_c pos' offset) in
+      let g := restrict_clip_g child_cd g in
+      let g' := fst (layer_render_memo child c0 child_cd g (add_c pos' offset) f) in
+      let f' := snd (layer_render_memo child c0 child_cd g (add_c pos' offset) f) in
+      layer_render_memo sib pos cd g' offset f'
+    end
+  end.
+
+Lemma layer_render_memo_good : forall d pos cd g offset f,
+    good_memo f ->
+    let g' := fst (layer_render_memo d pos cd g offset f) in
+    let f' := snd (layer_render_memo d pos cd g offset f) in
+    good_memo f' /\ g' = inc_render' d pos cd g offset.
+Proof.
+  split.
+  revert pos cd g offset f H.
+  induction d.
+  intros.
+  simpl.
+  destruct a, pos, pos0.
+  - apply IHd2.
+    clean.
+  - apply IHd2.
+    apply IHd1.
+    unfold good_memo in *.
+    destruct (f (Dom (Attributes left top width height color0 Relative ovf) d1 d2)).
+Admitted.
