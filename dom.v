@@ -639,7 +639,7 @@ Proof.
   destruct p; simpl; rewrite H, H2; try rewrite stupid_render0_correct; auto.
 Qed.
 
-(* == whatever_render ==
+(* == inc_render ==
    Instead of making a fresh graphic, paint on a graphic at an offset.
    Note that clipping is applied directly to boxes, not to composited graphics.  *)
 
@@ -670,7 +670,7 @@ Definition clip_box cd pos dim :=
   | Clip_to pos1 dim1 => box_intersect pos1 dim1 pos dim
   end.
 
-Function whatever_render0 dom pos cd g offset : graphic :=
+Function inc_render0 dom pos cd g offset : graphic :=
   match dom, pos with
   | None_d, _ => g
   | Dom (Attributes l t w h c p o) child sib, Coord x y =>
@@ -679,51 +679,51 @@ Function whatever_render0 dom pos cd g offset : graphic :=
       let (bg_pos, bg_dim) := clip_box cd pos (Dim w h) in
       let g := g CC (box_at bg_pos bg_dim c) @ offset in
       let child_cd := restrict_clip cd o pos (Dim w h) in
-      let g := whatever_render0 child pos child_cd g offset in
-      whatever_render0 sib (Coord x (y + h)) cd g offset
+      let g := inc_render0 child pos child_cd g offset in
+      inc_render0 sib (Coord x (y + h)) cd g offset
     | Relative =>
-      whatever_render0 sib (Coord x (y + h)) cd g offset
+      inc_render0 sib (Coord x (y + h)) cd g offset
     | Absolute =>
-      whatever_render0 sib pos cd g offset
+      inc_render0 sib pos cd g offset
     end
   end.
 
-Function whatever_render' dom pos cd g offset : graphic :=
+Function inc_render' dom pos cd g offset : graphic :=
   match dom, pos with
   | None_d, _ => g
   | Dom (Attributes l t w h c p o) child sib, Coord x y =>
     match p with
     | Static =>
       let child_cd := restrict_clip cd o pos (Dim w h) in
-      let g := whatever_render' child pos child_cd g offset in
-      whatever_render' sib (Coord x (y + h)) cd g offset
+      let g := inc_render' child pos child_cd g offset in
+      inc_render' sib (Coord x (y + h)) cd g offset
     | Relative => (* Do a static pass, then a positioned pass. *)
       let pos' := Coord (x + l) (y + t) in
       let (bg_pos, bg_dim) := clip_box cd pos' (Dim w h) in
       let g := g CC (box_at bg_pos bg_dim c) @ offset in
       (* Do a static pass, then a positioned pass. *)
       let child_cd := restrict_clip cd o pos' (Dim w h) in
-      let g := whatever_render0 child c0 child_cd g (add_c pos' offset) in
-      let g := whatever_render' child c0 child_cd g (add_c pos' offset) in
-      whatever_render' sib (Coord x (y + h)) cd g offset
+      let g := inc_render0 child c0 child_cd g (add_c pos' offset) in
+      let g := inc_render' child c0 child_cd g (add_c pos' offset) in
+      inc_render' sib (Coord x (y + h)) cd g offset
     | Absolute => (* Do a static pass, then a positioned pass. *)
       let pos' := Coord l t in
       let (bg_pos, bg_dim) := clip_box cd pos' (Dim w h) in
       let g := g CC (box_at bg_pos bg_dim c) @ offset in
       (* Do a static pass, then a positioned pass. *)
       let child_cd := restrict_clip cd o pos' (Dim w h) in
-      let g := whatever_render0 child c0 child_cd g (add_c pos' offset) in
-      let g := whatever_render' child c0 child_cd g (add_c pos' offset) in
-      whatever_render' sib pos cd g offset
+      let g := inc_render0 child c0 child_cd g (add_c pos' offset) in
+      let g := inc_render' child c0 child_cd g (add_c pos' offset) in
+      inc_render' sib pos cd g offset
     end
   end.
 
-Definition whatever_render d :=
-  whatever_render' d c0 Don't_clip blank c0.
+Definition inc_render d :=
+  inc_render' d c0 Don't_clip blank c0.
 
-Compute print (whatever_render test) 100 70.
+Compute print (inc_render test) 100 70.
 
-(* Goal: Prove that whatever_render is functionally equivalent to render.
+(* Goal: Prove that inc_render is functionally equivalent to render.
    Some helper lemmas are needed first. *)
 
 (* Note: These proofs are simple. They look complicated because of the
@@ -732,9 +732,9 @@ Compute print (whatever_render test) 100 70.
 
 (* Paste equivalence: Rendering onto a base graphic is the same as
    rendering onto a blank graphic, then compositing over the base graphic. *)
-(* Lemma whatever_render0_paste_equiv d pos cd g offset:
-  whatever_render0 d pos cd g offset =
-  g CC whatever_render0 d pos cd blank c0 @ offset.
+(* Lemma inc_render0_paste_equiv d pos cd g offset:
+  inc_render0 d pos cd g offset =
+  g CC inc_render0 d pos cd blank c0 @ offset.
 Proof.
   revert d pos cd g offset.
   induction d.
@@ -751,7 +751,7 @@ Proof.
         (blank CC box_at bg_pos bg_dim c @ c0) c0).
   rewrite (IHd2 (Coord x (y + h)) cd
      (blank CC box_at bg_pos bg_dim c @ c0
-      CC whatever_render0 d1 (Coord x y)
+      CC inc_render0 d1 (Coord x y)
            (restrict_clip cd o (Coord x y) (Dim w h)) blank c0 @ c0) c0).
   repeat (rewrite composite_assoc; simpl).
   rewrite composite_blank.
@@ -760,9 +760,9 @@ Proof.
   auto.
 Qed.
 
-Lemma whatever_render'_paste_equiv d pos cd g offset:
-  whatever_render' d pos cd g offset =
-  g CC whatever_render' d pos cd blank c0 @ offset.
+Lemma inc_render'_paste_equiv d pos cd g offset:
+  inc_render' d pos cd g offset =
+  g CC inc_render' d pos cd blank c0 @ offset.
 Proof.
   revert d pos cd g offset.
   induction d.
@@ -773,7 +773,7 @@ Proof.
   destruct p; simpl; auto.
   - rewrite IHd1, IHd2.
     rewrite (IHd2 (Coord x (y + h)) cd
-     (whatever_render' d1 (Coord x y)
+     (inc_render' d1 (Coord x y)
         (restrict_clip cd o (Coord x y) (Dim w h)) blank c0) c0).
     repeat (rewrite composite_assoc; simpl).
     replace (x' + 0) with x' by ring.
@@ -781,19 +781,19 @@ Proof.
     auto.
   - remember (clip_box cd (Coord (x + l) (y + t)) (Dim w h)) as bg.
     destruct bg as [bg_pos bg_dim].
-    rewrite whatever_render0_paste_equiv, IHd1, IHd2.
-    rewrite (whatever_render0_paste_equiv d1 _ _
+    rewrite inc_render0_paste_equiv, IHd1, IHd2.
+    rewrite (inc_render0_paste_equiv d1 _ _
       (blank CC box_at bg_pos bg_dim c @ c0) _).
     rewrite (IHd1 _ _
       (blank CC box_at bg_pos bg_dim c @ c0
-        CC whatever_render0 d1 (Coord (x + l) (y + t))
+        CC inc_render0 d1 (Coord (x + l) (y + t))
           (restrict_clip cd o (Coord (x + l) (y + t)) (Dim w h)) blank c0 @ c0) _).
     rewrite (IHd2 _ _
      (blank CC box_at bg_pos bg_dim c @ c0
-      CC whatever_render0 d1 (Coord (x + l) (y + t))
+      CC inc_render0 d1 (Coord (x + l) (y + t))
            (restrict_clip cd o (Coord (x + l) (y + t)) (Dim w h)) blank c0 @
       c0
-      CC whatever_render' d1 (Coord (x + l) (y + t))
+      CC inc_render' d1 (Coord (x + l) (y + t))
            (restrict_clip cd o (Coord (x + l) (y + t)) (Dim w h)) blank c0 @
       c0) _).
     repeat (rewrite composite_assoc; simpl).
@@ -803,18 +803,18 @@ Proof.
     auto.
   - remember (clip_box cd (Coord l t) (Dim w h)) as bg.
     destruct bg as [bg_pos bg_dim].
-    rewrite whatever_render0_paste_equiv, IHd1, IHd2.
-    rewrite (whatever_render0_paste_equiv d1 _ _
+    rewrite inc_render0_paste_equiv, IHd1, IHd2.
+    rewrite (inc_render0_paste_equiv d1 _ _
       (blank CC box_at bg_pos bg_dim c @ c0) _).
     rewrite (IHd1 _ _
       (blank CC box_at bg_pos bg_dim c @ c0
-         CC whatever_render0 d1 (Coord l t)
+         CC inc_render0 d1 (Coord l t)
               (restrict_clip cd o (Coord l t) (Dim w h)) blank c0 @ c0) _).
     rewrite (IHd2 _ _
       (blank CC box_at bg_pos bg_dim c @ c0
-      CC whatever_render0 d1 (Coord l t)
+      CC inc_render0 d1 (Coord l t)
            (restrict_clip cd o (Coord l t) (Dim w h)) blank c0 @ c0
-      CC whatever_render' d1 (Coord l t)
+      CC inc_render' d1 (Coord l t)
            (restrict_clip cd o (Coord l t) (Dim w h)) blank c0 @ c0)).
     repeat (rewrite composite_assoc; simpl).
     rewrite composite_blank.
@@ -851,9 +851,9 @@ Proof.
   
 Qed.
 
-Lemma whatever_render0_clip_equiv d pos cd:
-  whatever_render0 d pos cd blank c0 =
-  apply_clip cd (whatever_render0 d pos Don't_clip blank c0).
+Lemma inc_render0_clip_equiv d pos cd:
+  inc_render0 d pos cd blank c0 =
+  apply_clip cd (inc_render0 d pos Don't_clip blank c0).
 Proof.
   destruct cd as [|cpos cdim]; simpl; auto.
   revert pos cpos cdim.
@@ -866,20 +866,20 @@ Proof.
   destruct bg as [bg_pos bg_dim].
   repeat rewrite composite_onto_blank.
   destruct o; simpl. Focus 1.
-  rewrite whatever_render0_paste_equiv.
-  rewrite whatever_render0_paste_equiv.
-  rewrite (whatever_render0_paste_equiv d1 _ Don't_clip _ _).
-  rewrite (whatever_render0_paste_equiv d2 _ Don't_clip _ _).
+  rewrite inc_render0_paste_equiv.
+  rewrite inc_render0_paste_equiv.
+  rewrite (inc_render0_paste_equiv d1 _ Don't_clip _ _).
+  rewrite (inc_render0_paste_equiv d2 _ Don't_clip _ _).
   repeat rewrite clip_composite_distr.
   repeat rewrite subtr_c0.
   rewrite IHd1, IHd2.
 
 Qed. *)
 
-(* Show whatever_render is equivalent to reference renderer. *)
-(* Lemma whatever_render0_correct d pos:
+(* Show inc_render is equivalent to reference renderer. *)
+(* Lemma inc_render0_correct d pos:
   good_overflow d ->
-  render0 d pos = whatever_render0 d pos blank c0.
+  render0 d pos = inc_render0 d pos blank c0.
 Proof.
   intros. revert pos.
   induction d; auto.
@@ -887,18 +887,18 @@ Proof.
   intuition.
   destruct pos as [x y].
   destruct p; simpl; auto.
-  - rewrite whatever_render0_equiv.
+  - rewrite inc_render0_equiv.
     rewrite <- H1.
-    rewrite whatever_render0_equiv.
+    rewrite inc_render0_equiv.
     rewrite <- H0.
     replace (x + 0) with x by ring.
     replace (y + 0) with y by ring.
     auto.
 Qed.
 
-Lemma whatever_render'_correct d pos:
+Lemma inc_render'_correct d pos:
   good_overflow d ->
-  render' d pos = whatever_render' d pos blank c0.
+  render' d pos = inc_render' d pos blank c0.
 Proof.
   intros. revert pos.
   induction d; auto.
@@ -906,28 +906,28 @@ Proof.
   intuition.
   destruct pos as [x y].
   destruct p; simpl; unfold composite0.
-  - rewrite whatever_render'_equiv.
+  - rewrite inc_render'_equiv.
     rewrite <- H1.
-    rewrite whatever_render'_equiv.
+    rewrite inc_render'_equiv.
     rewrite <- H0.
     rewrite composite_onto_blank.
     auto.
-  - rewrite whatever_render'_equiv.
+  - rewrite inc_render'_equiv.
     rewrite <- H1.
-    rewrite whatever_render'_equiv.
+    rewrite inc_render'_equiv.
     rewrite <- H0.
-    rewrite whatever_render0_equiv.
+    rewrite inc_render0_equiv.
     replace (x + l + 0) with (x + l) by ring.
     replace (y + t + 0) with (y + t) by ring.
-    rewrite <- (whatever_render0_correct _ _ H2).
+    rewrite <- (inc_render0_correct _ _ H2).
     auto.
-  - rewrite whatever_render'_equiv.
+  - rewrite inc_render'_equiv.
     rewrite <- H1.
-    rewrite whatever_render'_equiv.
+    rewrite inc_render'_equiv.
     rewrite <- H0.
-    rewrite whatever_render0_equiv.
+    rewrite inc_render0_equiv.
     replace (l + 0) with l by ring.
     replace (t + 0) with t by ring.
-    rewrite <- (whatever_render0_correct _ _ H2).
+    rewrite <- (inc_render0_correct _ _ H2).
     auto.
 Qed. *)
