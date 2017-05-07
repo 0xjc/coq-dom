@@ -56,9 +56,11 @@ Definition subtr_c c1 c2 := match c1, c2 with
 | Coord x y, Coord x' y' => Coord (x - x') (y - y')
 end.
 
-Lemma add_c0 c : add_c c c0 = c.
+Lemma add_c0_r c : add_c c c0 = c.
 Proof. destruct c; simpl; ring_simplify (x + 0) (y + 0); auto. Qed.
-Lemma subtr_c0 c : subtr_c c c0 = c.
+Lemma add_c0_l c : add_c c0 c = c.
+Proof. destruct c; simpl; ring_simplify (0 + x) (0 + y); auto. Qed.
+Lemma sub_c0 c : subtr_c c c0 = c.
 Proof. destruct c; simpl; ring_simplify (x - 0) (y - 0); auto. Qed.
 
 Definition graphic := coordinate -> color.
@@ -135,9 +137,7 @@ Definition clip g off dim : graphic := fun coord =>
     if (in_box_dec x0 y0 w h x y) then g coord else None_c
   end.
 
-Definition blank_in g x0 y0 w h := forall x y,
-  in_box x0 y0 w h x y -> g (Coord x y) = None_c.
-
+(* Clipping the blank graphic gives the blank graphic. *)
 Lemma blank_clip : forall pos dim,
   clip blank pos dim = blank.
 Proof.
@@ -148,6 +148,9 @@ Proof.
   destruct pos, dim.
   destruct in_box_dec; auto.
 Qed.
+
+Definition blank_in g x0 y0 w h := forall x y,
+  in_box x0 y0 w h x y -> g (Coord x y) = None_c.
 
 (* Clipping to a region that's blank gives the blank graphic. *)
 Lemma blank_in_clip : forall g x0 y0 w h,
@@ -171,6 +174,7 @@ Proof.
   destruct in_box_dec; unfold in_box in *; auto; omega.
 Qed.
 
+(* Clipping distributes over compositing. *)
 Lemma clip_composite_distr g1 g2 offset pos dim:
   clip (g1 CC g2 @ offset) pos dim =
   (clip g1 pos dim) CC (clip g2 (subtr_c pos offset) dim) @ offset.
@@ -189,6 +193,16 @@ Proof.
     ring_simplify in i.
     ring_simplify (x - x' + x') (y - y' + y') in i.
     contradiction.
+Qed.
+
+(* Clipping is idempotent. *)
+Lemma clip_idem g pos dim :
+  clip (clip g pos dim) pos dim = clip g pos dim.
+Proof.
+  extensionality t.
+  destruct pos as [x y], dim as [w h], t as [xt yt].
+  unfold clip.
+  destruct in_box_dec; auto.
 Qed.
 
 (* The building block of our simple DOM model.
@@ -767,13 +781,14 @@ Function inc_render' dom pos cd g offset : graphic :=
   end.
 
 Definition inc_render d :=
-  inc_render' d c0 Don't_clip blank c0.
+  if is_good_dom d then inc_render' d c0 Don't_clip blank c0 else blank.
 
 Compute print (inc_render test) 100 70.
 
 (* Goal: Prove that inc_render is functionally equivalent to render.
    Some helper lemmas are needed first. *)
 
+(* Translate a clipping bound by an offset (reversed). *)
 Definition translate_clip cd offset :=
   match cd with
   | Don't_clip => Don't_clip
@@ -787,6 +802,7 @@ Definition apply_clip cd g :=
   | Clip_to pos dim => clip g pos dim
   end.
 
+(* Allows us to expand expressions of the form: clip (box_at ...) *)
 Lemma clip_box_correct x y w h c cpos cdim:
   clip (box_at (Coord x y) (Dim w h) c) cpos cdim =
   let (bg_pos, bg_dim) := box_intersect cpos cdim (Coord x y) (Dim w h) in
@@ -813,6 +829,7 @@ Proof.
     intuition.
 Qed.
 
+(* Allows us to expand expressions of the form: clip (clip ...) *)
 Lemma nested_clip_correct g pos dim pos' dim':
   clip (clip g pos dim) pos' dim' =
   let (pos'', dim'') := box_intersect pos dim pos' dim' in
@@ -833,8 +850,10 @@ Proof.
 Qed.
 
 (* Paste equivalence: Rendering onto a base graphic is the same as
-   rendering onto a blank graphic, then compositing over the base graphic. *)
-Lemma inc_render0_paste_equiv d pos cd g offset:
+   rendering onto a blank graphic, clipping the result,
+   then compositing over the base graphic. *)
+
+Lemma inc_render0_equiv d pos cd g offset:
   inc_render0 d pos cd g offset =
   g CC apply_clip (translate_clip cd offset) (inc_render0 d pos Don't_clip blank c0) @ offset.
 Proof.
@@ -863,7 +882,7 @@ Proof.
       rewrite composite_onto_blank;
       repeat rewrite clip_composite_distr;
       repeat rewrite (composite_assoc g _ _ (Coord x' y') _);
-      rewrite add_c0;
+      rewrite add_c0_r;
       rewrite (composite_box_shift _ _ _ _ (Coord x' y'));
       ring_simplify (x + x' - x') (y + y' - y') (x - 0) (y - 0);
       auto.
@@ -893,12 +912,14 @@ Proof.
       rewrite composite_onto_blank;
       repeat rewrite clip_composite_distr;
       repeat rewrite (composite_assoc g _ _ (Coord x' y') _);
-      rewrite add_c0, subtr_c0;
+      rewrite add_c0_r, sub_c0;
       ring_simplify (x + 0) (y + 0);
       rewrite H; auto.
     clear bg_pos bg_dim Heqbg H.
     rewrite nested_clip_correct.
     simpl.
+    (* TODO: Un-nastify this by avoiding simpl in order to use
+       box_intersect_shift (we do this in future cases). *)
     assert (Z.max cx (x + x') - x' = Z.max (x - 0) (cx - x')).
       rewrite Z.max_comm.
       rewrite <- Z.sub_max_distr_r.
@@ -928,7 +949,7 @@ Proof.
     rewrite H, H0, H1, H2; auto.
 Qed.
 
-Lemma inc_render'_paste_equiv d pos cd g offset:
+Lemma inc_render'_equiv d pos cd g offset:
   inc_render' d pos cd g offset =
   g CC apply_clip (translate_clip cd offset) (inc_render' d pos Don't_clip blank c0) @ offset.
 Proof.
@@ -949,12 +970,14 @@ Proof.
     rewrite (IHd2 _ _ (blank CC _ @ _)).
     rewrite composite_onto_blank.
     destruct cd as [|[cx cy] [cw ch]]; simpl.
-    + destruct o; simpl; rewrite composite_assoc; rewrite add_c0; auto.
+    + destruct o; simpl; rewrite composite_assoc; rewrite add_c0_r; auto.
       ring_simplify (x + x' - x') (y + y' - y') (x - 0) (y - 0); auto.
     + destruct o; simpl; rewrite clip_composite_distr; rewrite composite_assoc;
-        rewrite add_c0, subtr_c0; auto.
+        rewrite add_c0_r, sub_c0; auto.
       ring_simplify (x - 0) (y - 0).
       rewrite nested_clip_correct; simpl.
+      (* TODO: Un-nastify this by avoiding simpl in order to use
+         box_intersect_shift (we do this in future cases). *)
       assert (Z.max cx (x + x') - x' = Z.max x (cx - x')).
         rewrite <- Z.sub_max_distr_r.
         ring_simplify (x + x' - x').
@@ -984,89 +1007,252 @@ Proof.
       destruct bg as [bg_pos bg_dim].
     unfold composite0.
     rewrite composite_onto_blank.
+    ring_simplify (x + l + 0) (y + t + 0).
     rewrite IHd1.
     rewrite IHd2.
-    rewrite inc_render0_paste_equiv.
-    rewrite (IHd1 _ (restrict_clip Don't_clip o (Coord (x + l + 0) (y + t + 0))
+    rewrite inc_render0_equiv.
+    rewrite (IHd1 _ (restrict_clip Don't_clip o (Coord (x + l) (y + t))
                  (Dim w h))).
-    rewrite (inc_render0_paste_equiv _ _ (restrict_clip Don't_clip o (Coord (x + l + 0) (y + t + 0))
-              (Dim w h))).
+    rewrite (inc_render0_equiv _ _
+      (restrict_clip Don't_clip o (Coord (x + l) (y + t)) (Dim w h))).
     rewrite (IHd2 _ _ (_ CC _ @ _ CC _ @ _)).
     destruct cd as [|[cx cy] [cw ch]]; simpl.
     + destruct o; simpl in *;
         repeat rewrite composite_assoc; simpl;
         apply pair_eq in Heqbg; destruct Heqbg; subst;
         rewrite (composite_box_shift _ _ _ _ (Coord x' y')); simpl.
-      * ring_simplify (x + l + 0 + x') (y + t + 0 + y') (x' + 0) (y' + 0).
-        replace (x' + (x + l + 0)) with (x + l + x') by ring.
-        replace (y' + (y + t + 0)) with (y + t + y') by ring.
+      * ring_simplify (x' + 0) (y' + 0).
+        replace (x' + (x + l)) with (x + l + x') by ring.
+        replace (y' + (y + t)) with (y + t + y') by ring.
         auto.
-      * ring_simplify (x + l + 0 + x') (y + t + 0 + y')
-          (x + l + x' - (x + l + x')) (y + t + y' - (y + t + y'))
-          (x + l + 0 - (x + l + 0)) (y + t + 0 - (y + t + 0))
+      * ring_simplify (x + l + x' - (x + l + x')) (y + t + y' - (y + t + y'))
+          (x + l - (x + l)) (y + t - (y + t))
           (x' + 0) (y' + 0).
-        replace (x' + (x + l + 0)) with (x + l + x') by ring.
-        replace (y' + (y + t + 0)) with (y + t + y') by ring.
+        replace (x' + (x + l)) with (x + l + x') by ring.
+        replace (y' + (y + t)) with (y + t + y') by ring.
         auto.
+    + repeat rewrite clip_composite_distr.
+      repeat rewrite composite_assoc.
+      rewrite clip_box_correct.
+      unfold clip_box in Heqbg.
+      remember (box_intersect (Coord (cx - x') (cy - y')) (Dim cw ch)
+        (Coord (x + l) (y + t)) (Dim w h)) as bg'; destruct bg' as [bg_pos' bg_dim'].
+      rewrite (composite_box_shift _ _ _ _ (Coord x' y')).
+      rewrite add_c0_r, sub_c0.
+      pose (box_intersect_shift
+        (Coord cx cy) (Dim cw ch)
+        (Coord (x + l + x') (y + t + y')) (Dim w h)
+        (Coord (-x') (-y'))).
+      rewrite <- Heqbg in e.
+      unfold add_c at 1 2 in e.
+      ring_simplify (cx + - x') (cy + - y')
+        (x + l + x' + - x') (y + t + y' + - y') in e.
+      rewrite <- Heqbg' in e.
+      apply pair_eq in e; destruct e.
+      rewrite H, H0.
+      clear - IHd1 IHd2.
+      destruct bg_pos; simpl.
+      ring_simplify (x0 + - x' + x') (y0 + - y' + y').
+      destruct o;
+        repeat rewrite clip_composite_distr;
+        repeat rewrite composite_assoc.
+      * simpl. 
+        replace (cx - (x + l + x')) with (cx - x' - (x + l)) by ring.
+        replace (cy - (y + t + y')) with (cy - y' - (y + t)) by ring.
+        replace (x + l + x') with (x' + (x + l)) by ring.
+        replace (y + t + y') with (y' + (y + t)) by ring.
+        auto.
+      * unfold restrict_clip, clip_intersect.
+        remember (box_intersect (Coord cx cy) _ _ _) as z;
+          destruct z as [[cx1 cy1] [cw1 ch1]].
+        unfold translate_clip, apply_clip, subtr_c.
+        repeat rewrite nested_clip_correct.
+        remember (box_intersect (Coord (x + l - (x + l)) _) _ _ _) as z';
+          destruct z' as [[cx2 cy2] [cw2 ch2]].
+        rewrite box_intersect_comm in Heqz'.
+        pose (box_intersect_shift (Coord (cx - x' - (x + l)) (cy - y' - (y + t)))
+          (Dim cw ch) (Coord (x + l - (x + l)) (y + t - (y + t))) (Dim w h)
+          (Coord (x + l + x') (y + t + y'))).
+        unfold add_c in e.
+        rewrite <- Heqz' in e.
+        ring_simplify (cx - x' - (x + l) + (x + l + x'))
+          (cy - y' - (y + t) + (y + t + y')) in e.
+        replace (x + l - (x + l) + (x + l + x')) with (x + l + x') in e by ring.
+        replace (y + t - (y + t) + (y + t + y')) with (y + t + y') in e by ring.
+        rewrite <- Heqz in e.
+        inversion_clear e.
+        clear - IHd1 IHd2.
+        ring_simplify (cx2 + (x + l + x') - (x + l + x'))
+          (cy2 + (y + t + y') - (y + t + y')).
+        replace (x' + (x + l)) with (x + l + x') by ring.
+        replace (y' + (y + t)) with (y + t + y') by ring.
+        auto.
+  - remember (clip_box cd (Coord (l + x') (t + y')) (Dim w h)) as bg;
+      destruct bg as [bg_pos bg_dim].
+    unfold composite0.
+    rewrite composite_onto_blank.
+    ring_simplify (l + 0) (t + 0).
+    rewrite IHd1.
+    rewrite IHd2.
+    rewrite inc_render0_equiv.
+    rewrite (IHd1 _ (restrict_clip Don't_clip o (Coord l t)
+                 (Dim w h))).
+    rewrite (inc_render0_equiv _ _
+      (restrict_clip Don't_clip o (Coord l t) (Dim w h))).
+    rewrite (IHd2 _ _ (_ CC _ @ _ CC _ @ _)).
+    destruct cd as [|[cx cy] [cw ch]]; simpl.
     + destruct o; simpl in *;
-        repeat rewrite clip_composite_distr; simpl;
         repeat rewrite composite_assoc; simpl;
-        apply pair_eq in Heqbg; destruct Heqbg; subst.
-
-Abort.
+        apply pair_eq in Heqbg; destruct Heqbg; subst;
+        rewrite (composite_box_shift _ _ _ _ (Coord x' y')); simpl.
+      * ring_simplify  (x' + 0) (y' + 0).
+        replace (x' + l) with (l + x') by ring.
+        replace (y' + t) with (t + y') by ring.
+        auto.
+      * ring_simplify (l + x' - (l + x')) (t + y' - (t + y'))
+          (l - l) (t - t) (x' + 0) (y' + 0).
+        replace (x' + l) with (l + x') by ring.
+        replace (y' + t) with (t + y') by ring.
+        auto.
+    + repeat rewrite clip_composite_distr.
+      repeat rewrite composite_assoc.
+      rewrite clip_box_correct.
+      unfold clip_box in Heqbg.
+      remember (box_intersect (Coord (cx - x') (cy - y')) (Dim cw ch)
+        (Coord l t) (Dim w h)) as bg'; destruct bg' as [bg_pos' bg_dim'].
+      rewrite (composite_box_shift _ _ _ _ (Coord x' y')).
+      rewrite add_c0_r, sub_c0.
+      pose (box_intersect_shift
+        (Coord cx cy) (Dim cw ch)
+        (Coord (l + x') (t + y')) (Dim w h)
+        (Coord (-x') (-y'))).
+      rewrite <- Heqbg in e.
+      unfold add_c at 1 2 in e.
+      ring_simplify (cx + - x') (cy + - y')
+        (l + x' + - x') (t + y' + - y') in e.
+      rewrite <- Heqbg' in e.
+      inversion_clear e.
+      clear - IHd1 IHd2.
+      destruct bg_pos; simpl.
+      ring_simplify (x0 + - x' + x') (y0 + - y' + y').
+      destruct o;
+        repeat rewrite clip_composite_distr;
+        repeat rewrite composite_assoc.
+      * simpl. 
+        replace (cx - (l + x')) with (cx - x' - l) by ring.
+        replace (cy - (t + y')) with (cy - y' - t) by ring.
+        replace (l + x') with (x' + l) by ring.
+        replace (t + y') with (y' + t) by ring.
+        auto.
+      * unfold restrict_clip, clip_intersect.
+        remember (box_intersect (Coord cx cy) _ _ _) as z;
+          destruct z as [[cx1 cy1] [cw1 ch1]].
+        unfold translate_clip, apply_clip, subtr_c.
+        repeat rewrite nested_clip_correct.
+        remember (box_intersect (Coord (l - l) _) _ _ _) as z';
+          destruct z' as [[cx2 cy2] [cw2 ch2]].
+        rewrite box_intersect_comm in Heqz'.
+        pose (box_intersect_shift (Coord (cx - x' - l) (cy - y' - t))
+          (Dim cw ch) (Coord (l - l) (t - t)) (Dim w h)
+          (Coord (l + x') (t + y'))).
+        unfold add_c in e.
+        rewrite <- Heqz' in e.
+        ring_simplify (cx - x' - l + (l + x')) (cy - y' - t + (t + y'))
+          (l - l + (l + x')) (t - t + (t + y')) in e.
+        replace (x' + l) with (l + x') in e by ring.
+        replace (y' + t) with (t + y') in e by ring.
+        rewrite <- Heqz in e.
+        inversion_clear e.
+        clear - IHd1 IHd2.
+        ring_simplify (cx2 + (l + x') - (l + x'))
+          (cy2 + (t + y') - (t + y')).
+        replace (x' + l) with (l + x') by ring.
+        replace (y' + t) with (t + y') by ring.
+        auto.
+Qed.
 
 (* Show inc_render is equivalent to reference renderer. *)
-(* Lemma inc_render0_correct d pos:
-  good_overflow d ->
-  render0 d pos = inc_render0 d pos blank c0.
+Lemma inc_render0_correct d pos:
+  render0 d pos = inc_render0 d pos Don't_clip blank c0.
 Proof.
   intros. revert pos.
   induction d; auto.
-  inversion H; subst.
-  intuition.
-  destruct pos as [x y].
-  destruct p; simpl; auto.
-  - rewrite inc_render0_equiv.
-    rewrite <- H1.
-    rewrite inc_render0_equiv.
-    rewrite <- H0.
-    replace (x + 0) with x by ring.
-    replace (y + 0) with y by ring.
+  destruct a as [l t w h c p o], pos as [x y].
+  destruct p, o; simpl; auto;
+    rewrite inc_render0_equiv, inc_render0_equiv, IHd1, IHd2; simpl.
+  - ring_simplify (x + 0) (y + 0).
+    unfold box.
+    rewrite (composite_box_shift _ _ _ _ (Coord x y)).
+    rewrite add_c0_l.
+    auto.
+  - ring_simplify (x + 0) (y + 0) (x - 0) (y - 0).
+    unfold box.
+    rewrite (composite_box_shift _ _ _ _ (Coord x y)).
+    rewrite add_c0_l.
     auto.
 Qed.
 
 Lemma inc_render'_correct d pos:
-  good_overflow d ->
-  render' d pos = inc_render' d pos blank c0.
+  render' d pos = inc_render' d pos Don't_clip blank c0.
 Proof.
   intros. revert pos.
   induction d; auto.
-  inversion H; subst.
-  intuition.
-  destruct pos as [x y].
-  destruct p; simpl; unfold composite0.
-  - rewrite inc_render'_equiv.
-    rewrite <- H1.
-    rewrite inc_render'_equiv.
-    rewrite <- H0.
-    rewrite composite_onto_blank.
+  destruct a as [l t w h c p o], pos as [x y].
+  destruct p, o; simpl;
+    rewrite inc_render'_equiv, inc_render'_equiv, IHd1, IHd2; simpl.
+  - rewrite composite_onto_blank; auto.
+  - rewrite composite_onto_blank.
+    ring_simplify (x + 0 - 0) (y + 0 - 0); auto.
+  - rewrite inc_render0_equiv; simpl.
+    rewrite inc_render0_correct.
+    unfold box.
+    rewrite (composite_box_shift _ _ _ _ (Coord (x + l) (y + t))).
+    rewrite add_c0_l.
+    ring_simplify (x + l + 0) (y + t + 0).
     auto.
-  - rewrite inc_render'_equiv.
-    rewrite <- H1.
-    rewrite inc_render'_equiv.
-    rewrite <- H0.
-    rewrite inc_render0_equiv.
-    replace (x + l + 0) with (x + l) by ring.
-    replace (y + t + 0) with (y + t) by ring.
-    rewrite <- (inc_render0_correct _ _ H2).
+  - unfold box.
+    rewrite (composite_box_shift _ _ _ _ (Coord (x + l) (y + t))).
+    rewrite add_c0_l.
+    repeat rewrite clip_composite_distr; simpl.
+    rewrite blank_clip, composite_onto_blank.
+    rewrite inc_render0_equiv; simpl.
+    unfold composite0; rewrite composite_onto_blank.
+    rewrite inc_render0_correct.
+    ring_simplify (x + l - 0) (y + t - 0)
+      (x + l - (x + l)) (y + t - (y + t))
+      (x + l + 0) (y + t + 0)
+      (x + l - (x + l)) (y + t - (y + t)).
+    unfold box_at at 1.
+    rewrite clip_idem.
     auto.
-  - rewrite inc_render'_equiv.
-    rewrite <- H1.
-    rewrite inc_render'_equiv.
-    rewrite <- H0.
-    rewrite inc_render0_equiv.
-    replace (l + 0) with l by ring.
-    replace (t + 0) with t by ring.
-    rewrite <- (inc_render0_correct _ _ H2).
+  - rewrite inc_render0_equiv; simpl.
+    rewrite inc_render0_correct.
+    unfold box.
+    rewrite (composite_box_shift _ _ _ _ (Coord l t)).
+    rewrite add_c0_l.
+    ring_simplify (l + 0) (t + 0).
     auto.
-Qed. *)
+  - unfold box.
+    rewrite (composite_box_shift _ _ _ _ (Coord l t)).
+    rewrite add_c0_l.
+    repeat rewrite clip_composite_distr; simpl.
+    rewrite blank_clip, composite_onto_blank.
+    rewrite inc_render0_equiv; simpl.
+    unfold composite0; rewrite composite_onto_blank.
+    rewrite inc_render0_correct.
+    ring_simplify (l - 0) (t - 0)
+      (l - l) (t - t)
+      (l + 0) (t + 0)
+      (l - l) (t - t).
+    unfold box_at at 1.
+    rewrite clip_idem.
+    auto.
+Qed.
+
+Lemma inc_render_correct d:
+  render d = inc_render d.
+Proof.
+  unfold render, inc_render.
+  destruct is_good_dom; auto.
+  apply inc_render'_correct.
+Qed.
